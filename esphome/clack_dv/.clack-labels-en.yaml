@@ -22,6 +22,8 @@ substitutions:
   clack_chlorinator_delay: Chlorinator active time
   clack_leakage_alarm_delay: Delay leakage alarm
   clack_water_flow_timeout_delay: Water flow timeout
+  clack_salt_settle_time: Salt settle time after regen
+  clack_salt_refill_detect: Salt refill detection
   clack_watermeter_pulse: Watermeter pulse
   clack_regeneration_pulse: Regeneration pulse
   clack_ip: Water softener IP

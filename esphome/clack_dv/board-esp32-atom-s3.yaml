@@ -135,6 +135,8 @@ button:
       then:
         - lambda: |-
             id(last_distance) = id(clack_distance_tof).state;
+            id(refill_candidate_start) = 0;
+            id(idle_distance) = id(clack_distance_tof).state;
         - component.update: clack_distance
         - lambda: |-
             id(saltfill_last) = id(sntp_time).now().timestamp;

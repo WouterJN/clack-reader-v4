@@ -206,6 +206,35 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Time the last regeneration ended; salt readings are ignored until it has settled
+  - id: regen_end_time
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+  # Brine tank is drawn down (after brine, before fill): salt is visible during a regeneration
+  - id: salt_window_open
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Deepest salt reading since the last regeneration has settled (reference for refill detection)
+  - id: idle_distance
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+
+  # Salt refill detection: start time and deepest reading of a sustained closer reading
+  - id: refill_candidate_start
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: refill_candidate_distance
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+
 script:
   ### On reboot or powerloss of the esp, set the time left, last regeneration time, and capacity counters
   # Script "on_boot"
@@ -260,6 +289,67 @@ script:
                   binary_sensor.is_off: clack_water_flowing
                 timeout: 20s
             - lambda: 'id(leakage_detected) = false;'
+
+  ### Process a salt distance reading from the TOF sensor.
+  # Water covers the salt after a regeneration fill, which reads closer than the salt itself.
+  # Therefore only keep the deepest reading (salt only goes down). During a regeneration only
+  # readings between brine and fill are used (tank drawn down), after it the settle time is skipped.
+  # A salt refill is detected as a sustained closer reading outside a regeneration and its settle
+  # time (the water level only changes during a regeneration).
+  # Script "process_salt_reading"
+  - id: process_salt_reading
+    mode: queued
+    parameters:
+      distance: float
+    then:
+      - lambda: |-
+          if (distance <= 0.0) return;  // invalid reading
+
+          auto now = id(sntp_time).now();
+          bool in_regen = id(wait_on_delay);
+          if (in_regen && !id(salt_window_open)) return;
+          if (!in_regen && now.is_valid()) {
+            int settle = int(id(clack_salt_settle_time).state * 3600);
+            if (now.timestamp < id(regen_end_time) + settle) return;
+          }
+
+          // Salt only goes down: keep the deepest reading
+          if (id(last_distance) <= 0.0 || distance >= id(last_distance)) {
+            id(last_distance) = distance;
+          }
+          if (in_regen) return;
+
+          // Refill detection, only against readings of the same idle period. After a post fill
+          // regeneration the water covers the salt, which reads closer than the salt seen during
+          // the regeneration, but the water level stays the same until the next regeneration.
+          if (id(idle_distance) <= 0.0 || distance >= id(idle_distance)) {
+            id(idle_distance) = distance;
+            id(refill_candidate_start) = 0;
+            return;
+          }
+
+          float threshold = id(clack_salt_refill_detect).state;
+          if (!now.is_valid() || threshold <= 0.0 || distance > id(idle_distance) - threshold) {
+            id(refill_candidate_start) = 0;  // noise, or refill detection disabled
+            return;
+          }
+
+          if (id(refill_candidate_start) == 0) {
+            id(refill_candidate_start) = now.timestamp;
+            id(refill_candidate_distance) = distance;
+          } else {
+            id(refill_candidate_distance) = std::max(id(refill_candidate_distance), distance);
+          }
+
+          if (now.timestamp - id(refill_candidate_start) >= 3600) {
+            ESP_LOGI("main", "Salt refill detected: %.1f cm -> %.1f cm", id(last_distance), id(refill_candidate_distance));
+            id(last_distance) = id(refill_candidate_distance);
+            id(idle_distance) = id(refill_candidate_distance);
+            id(saltfill_last) = now.timestamp;
+            id(refill_candidate_start) = 0;
+            id(clack_saltfill_last).update();
+          }
+      - component.update: clack_distance
 
   ### Define a script that sets a motor run to simulate steps.
   # Script "clack_motor_run"
@@ -529,6 +619,7 @@ script:
       ## store Brine time
       - lambda: |-
           id(save_brine_time) = id(clack_cycle_runtime).state;
+          id(salt_window_open) = true;
       - component.update: clack_brine_time
 
   # Script "start_backwash_cycle"
@@ -607,6 +698,7 @@ script:
       - lambda: |-
           id(cycle_step) = "Fill";
           id(start_time) = id(sntp_time).now().timestamp;
+          id(salt_window_open) = false;
       - component.update: clack_cycle_step
 
   # Script "continue_fill_cycle"
@@ -650,7 +742,9 @@ script:
   - id: initial_post_cycle_steps
     mode: single
     then:
-      - lambda: id(wait_on_delay) = true;
+      - lambda: |-
+          id(wait_on_delay) = true;
+          id(salt_window_open) = false;
       - lambda: id(water_meter_freeze) = true;
       ## store used liters
       - script.execute: update_total_liters_used
@@ -667,7 +761,9 @@ script:
   - id: initial_pre_cycle_steps
     mode: single
     then:
-      - lambda: id(wait_on_delay) = true;
+      - lambda: |-
+          id(wait_on_delay) = true;
+          id(salt_window_open) = false;
       ################
       ## start regeneration
       - script.execute: update_regeneration_start_time
@@ -705,15 +801,33 @@ script:
           id(cycle_step) = "Idle";
           id(start_time) = 0;
           id(start_time_total) = 0;
+          id(salt_window_open) = false;
+          id(regen_end_time) = id(sntp_time).now().timestamp;
+          id(idle_distance) = 0.0;
+          id(refill_candidate_start) = 0;
       - component.update: clack_cycle_step
       - component.update: clack_cycle_runtime
       - component.update: clack_cycle_total_runtime
       - lambda: |-
-          id(wait_on_delay) = false;
           id(water_meter_freeze) = false;
-      - delay: 5s
+      # The motor keeps moving for several seconds when returning to service.
+      # Keep blocking a new cycle meanwhile, otherwise those pulses start a phantom regeneration.
+      - delay: 60s
+      - lambda: |-
+          id(wait_on_delay) = false;
 
 interval:
+  # Process the salt distance at a fixed rate, also when it does not change (refill detection)
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(clack_distance_tof).has_state();'
+          then:
+            - script.execute:
+                id: process_salt_reading
+                distance: !lambda 'return id(clack_distance_tof).state;'
+
   - interval: 1s
     then:
       - if:
@@ -1769,6 +1883,40 @@ number:
         - lambda: |-
             id(duration_leakage) = int(x);
 
+
+  ##
+  # Hours after a regeneration during which salt readings are ignored (water settling)
+  # Number "clack_salt_settle_time"
+  - platform: template
+    id: clack_salt_settle_time
+    name: ${clack_salt_settle_time}
+    icon: mdi:timer-sand
+    optimistic: true
+    mode: box
+    step: 0.5
+    entity_category: config
+    min_value: 0
+    max_value: 48
+    initial_value: 6
+    restore_value: yes
+    unit_of_measurement: h
+
+  ##
+  # Salt refill detection: closer reading in cm that counts as a refill when stable for 1 hour (0 = off)
+  # Number "clack_salt_refill_detect"
+  - platform: template
+    id: clack_salt_refill_detect
+    name: ${clack_salt_refill_detect}
+    icon: mdi:basket-fill
+    optimistic: true
+    mode: box
+    step: 0.5
+    entity_category: config
+    min_value: 0
+    max_value: 30
+    initial_value: 3
+    restore_value: yes
+    unit_of_measurement: cm
 
   ##
   # Set minimum time delay for considering water flow stopped

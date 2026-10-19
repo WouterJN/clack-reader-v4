@@ -48,12 +48,8 @@ sensor:
       - clamp:
           min_value: 0.0
           max_value: 230.0
+      - median:
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
       - delta: 0.2
-    on_value:
-      then:
-        - lambda: |-
-            float new_distance = float(x);
-            if (id(last_distance) <= 0.0 || new_distance >= id(last_distance)) {
-              id(last_distance) = new_distance;
-            }
-        - component.update: clack_distance
