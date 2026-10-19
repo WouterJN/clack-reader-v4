@@ -201,23 +201,6 @@ globals:
     restore_value: yes
     initial_value: '0'
 
-  # Water used by a regeneration (to drain), estimated from the step times and flow rates.
-  # The flow meter does not see this water, it only measures the water to the house.
-  - id: regen_water
-    type: float
-    restore_value: no
-    initial_value: '0.0'
-
-  - id: save_regen_water
-    type: float
-    restore_value: yes
-    initial_value: '0.0'
-
-  - id: regen_water_total
-    type: float
-    restore_value: yes
-    initial_value: '0.0'
-
   - id: leakage_detected
     type: bool
     restore_value: no
@@ -296,8 +279,6 @@ script:
       - component.update: clack_cycle_runtime
       - component.update: clack_cycle_total_runtime
       - component.update: clack_total_run_time
-      - component.update: clack_regen_water
-      - component.update: clack_regen_water_total
       - component.update: clack_watermeter_total
       #- lambda: 'id(wait_on_delay) = false;'
       #- lambda: 'id(water_meter_freeze) = false;'
@@ -649,7 +630,6 @@ script:
       ## store Brine time
       - lambda: |-
           id(save_brine_time) = id(clack_cycle_runtime).state;
-          id(regen_water) += id(save_brine_time) / 60.0 * id(clack_brine_draw_flow).state;
           id(salt_window_open) = true;
       - component.update: clack_brine_time
 
@@ -674,7 +654,6 @@ script:
       ## store Backwash time
       - lambda: |-
           id(save_backwash_time) = id(clack_cycle_runtime).state;
-          id(regen_water) += id(save_backwash_time) / 60.0 * id(clack_drain_flow).state;
       - component.update: clack_backwash_time
 
   # Script "start_backwash2_cycle"
@@ -698,7 +677,6 @@ script:
       ## store Backwash2 time
       - lambda: |-
           id(save_backwash2_time) = id(clack_cycle_runtime).state;
-          id(regen_water) += id(save_backwash2_time) / 60.0 * id(clack_drain_flow).state;
       - component.update: clack_backwash2_time
 
   # Script "start_rinse_cycle"
@@ -722,7 +700,6 @@ script:
       ## store Rinse time
       - lambda: |-
           id(save_rinse_time) = id(clack_cycle_runtime).state;
-          id(regen_water) += id(save_rinse_time) / 60.0 * id(clack_drain_flow).state;
       - component.update: clack_rinse_time
 
   # Script "start_fill_cycle"
@@ -747,7 +724,6 @@ script:
       ## store Fill time
       - lambda: |-
           id(save_fill_time) = id(clack_cycle_runtime).state;
-          id(regen_water) += id(save_fill_time) / 60.0 * 1.9;  // refill flow control 0.5 gpm = 1.9 L/min
       - component.update: clack_fill_time
 
   # Script "start_service_cycle"
@@ -780,7 +756,6 @@ script:
       - lambda: |-
           id(wait_on_delay) = true;
           id(salt_window_open) = false;
-          id(regen_water) = 0.0;
       - lambda: id(water_meter_freeze) = true;
       ## store used liters
       - script.execute: update_total_liters_used
@@ -800,7 +775,6 @@ script:
       - lambda: |-
           id(wait_on_delay) = true;
           id(salt_window_open) = false;
-          id(regen_water) = 0.0;
       ################
       ## start regeneration
       - script.execute: update_regeneration_start_time
@@ -827,11 +801,7 @@ script:
       ## store Total run time
       - lambda: |-
           id(save_total_run_time) = id(sntp_time).now().timestamp - id(start_time_total);
-          id(save_regen_water) = id(regen_water);
-          id(regen_water_total) += id(regen_water);
       - component.update: clack_total_run_time
-      - component.update: clack_regen_water
-      - component.update: clack_regen_water_total
 
   # Script "reset_cycle_steps"
   - id: reset_cycle_steps
@@ -1469,31 +1439,6 @@ sensor:
       then:
         - component.update: clack_total_run_time_txt
 
-  # Sensor "clack_regen_water": estimated water used by the last regeneration
-  - platform: template
-    name: ${clack_regen_water}
-    id: clack_regen_water
-    icon: mdi:water-sync
-    unit_of_measurement: L
-    accuracy_decimals: 0
-    state_class: measurement
-    update_interval: never
-    lambda: |-
-      return id(save_regen_water);
-
-  # Sensor "clack_regen_water_total": estimated water used by all regenerations
-  - platform: template
-    name: ${clack_regen_water_total}
-    id: clack_regen_water_total
-    icon: mdi:water-sync
-    unit_of_measurement: L
-    device_class: water
-    state_class: total_increasing
-    accuracy_decimals: 0
-    update_interval: never
-    lambda: |-
-      return id(regen_water_total);
-
   # Sensor "internal_temperature"
   - platform: internal_temperature
     name: "Internal Temperature"
@@ -1981,40 +1926,6 @@ number:
     initial_value: 3
     restore_value: yes
     unit_of_measurement: cm
-
-  ##
-  # Flow to drain during backwash and rinse (drain line flow control), to estimate regeneration water
-  # Number "clack_drain_flow"
-  - platform: template
-    id: clack_drain_flow
-    name: ${clack_drain_flow}
-    icon: mdi:waves-arrow-right
-    optimistic: true
-    mode: box
-    step: 0.1
-    entity_category: config
-    min_value: 0
-    max_value: 30
-    initial_value: 5.0
-    restore_value: yes
-    unit_of_measurement: L/min
-
-  ##
-  # Flow to drain during brine draw and slow rinse, to estimate regeneration water
-  # Number "clack_brine_draw_flow"
-  - platform: template
-    id: clack_brine_draw_flow
-    name: ${clack_brine_draw_flow}
-    icon: mdi:waves-arrow-right
-    optimistic: true
-    mode: box
-    step: 0.1
-    entity_category: config
-    min_value: 0
-    max_value: 10
-    initial_value: 1.5
-    restore_value: yes
-    unit_of_measurement: L/min
 
   ##
   # Set minimum time delay for considering water flow stopped

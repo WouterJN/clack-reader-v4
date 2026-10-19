@@ -70,10 +70,6 @@ substitutions:
   clack_water_flow_timeout_delay: Water flow timeout
   clack_salt_settle_time: Temps de stabilisation sel après régénération
   clack_salt_refill_detect: Détection remplissage sel
-  clack_regen_water: Eau de régénération
-  clack_regen_water_total: Eau de régénération totale
-  clack_drain_flow: Débit lavage/rinçage
-  clack_brine_draw_flow: Débit aspiration saumure
   clack_test_motor_run: Test button motor run
   clack_save_total_liters_used: Capacity used
   clack_save_total_operation_time: Operation time
