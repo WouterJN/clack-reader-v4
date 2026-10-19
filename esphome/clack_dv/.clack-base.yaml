@@ -240,6 +240,17 @@ script:
   # Script "on_boot"
   - id: on_boot
     then:
+      # A reboot stops a running regeneration script, but the restored flags would keep
+      # blocking regeneration detection and salt readings forever. Start again from Idle.
+      - lambda: |-
+          if (id(wait_on_delay)) {
+            ESP_LOGW("main", "Reboot during regeneration (step %s), resetting to Idle", id(cycle_step).c_str());
+            id(wait_on_delay) = false;
+            id(water_meter_freeze) = false;
+            id(cycle_step) = "Idle";
+            id(start_time) = 0;
+            id(start_time_total) = 0;
+          }
       - component.update: clack_saltfill_last # add old date to dashboard when boot
       - component.update: clack_resinclean_last # add old date to dashboard when boot
       - component.update: clack_regeneration_last # add old date to dashboard when boot
@@ -1170,8 +1181,7 @@ sensor:
     id: clack_m3_left
     name: ${clack_m3_left}
     unit_of_measurement: m³
-    device_class: water
-    state_class: total
+    state_class: measurement
     accuracy_decimals: 2
     update_interval: never
     lambda: |-
@@ -1186,8 +1196,7 @@ sensor:
     id: clack_l_left
     name: ${clack_l_left}
     unit_of_measurement: L
-    device_class: water
-    state_class: total
+    state_class: measurement
     accuracy_decimals: 1
     update_interval: ${watermeter_update_interval}
     lambda: |-
@@ -1965,9 +1974,13 @@ substitutions:
     return std::string(str);
 
   format_datetime_dh: |-
+    // Negative when overdue: show the sign once, e.g. "-336d 6h"
+    const char *sign = (days < 0 || hours < 0) ? "-" : "";
+    days = abs(days);
+    hours = abs(hours);
     if (days > 0) {
-      snprintf(str, sizeof(str), "%id %ih", days, hours);
+      snprintf(str, sizeof(str), "%s%id %ih", sign, days, hours);
     } else {
-      snprintf(str, sizeof(str), "%ih", hours);
+      snprintf(str, sizeof(str), "%s%ih", sign, hours);
     }
     return std::string(str);
