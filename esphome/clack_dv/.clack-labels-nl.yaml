@@ -24,6 +24,10 @@ substitutions:
   clack_water_flow_timeout_delay: Water flow timeout
   clack_salt_settle_time: Zout wachttijd na regeneratie
   clack_salt_refill_detect: Zout bijvullen detectie
+  clack_regen_water: Regeneratie water
+  clack_regen_water_total: Regeneratie water totaal
+  clack_drain_flow: Terugspoel/spoel flow
+  clack_brine_draw_flow: Pekel zuig flow
   clack_watermeter_pulse: Watermeter pulse
   clack_regeneration_pulse: Regeneratie pulse
   clack_ip: Waterontharder IP
