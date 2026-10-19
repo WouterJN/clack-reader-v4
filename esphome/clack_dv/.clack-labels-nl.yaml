@@ -24,6 +24,15 @@ substitutions:
   clack_water_flow_timeout_delay: Water flow timeout
   clack_salt_settle_time: Zout wachttijd na regeneratie
   clack_salt_refill_detect: Zout bijvullen detectie
+  clack_next_regen: "Volgende regeneratie"
+  clack_next_regen_reason: "Reden volgende regeneratie"
+  clack_next_regen_hours: "Uren tot volgende regeneratie"
+  clack_valve_regen_time: "Klep regeneratietijd"
+  clack_valve_day_override: "Klep max dagen"
+  clack_reason_days: "Dagen"
+  clack_reason_water: "Waterverbruik"
+  clack_avg_daily_use: "Gemiddeld waterverbruik per dag"
+  clack_early_regen_margin: "Water over tot vroege regeneratie"
   clack_watermeter_pulse: Watermeter pulse
   clack_regeneration_pulse: Regeneratie pulse
   clack_ip: Waterontharder IP

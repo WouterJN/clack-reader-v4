@@ -206,6 +206,28 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Predicted next regeneration (UTC timestamp, 0 = unknown) and whether it is caused by water usage
+  - id: next_regen_ts
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  - id: next_regen_water
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Average water use per day and the water that can still be used before the valve regenerates early
+  - id: avg_daily_use
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
+  - id: early_regen_margin
+    type: float
+    restore_value: no
+    initial_value: 'NAN'
+
   # Time the last regeneration ended; salt readings are ignored until it has settled
   - id: regen_end_time
     type: int
@@ -257,6 +279,7 @@ script:
       - component.update: clack_capacity_days # add old date to dashboard when boot
       - component.update: clack_time_to_resinclean # add old time to dashboard when boot
       - component.update: clack_time_to_regen # add old time to dashboard when boot
+      - component.update: clack_next_regen_hours
       - component.update: clack_distance # add old distance to dashboard when boot
       - pulse_meter.set_total_pulses: # Publish the initial state of totalWaterUsage on boot
           id: clack_flow_rate
@@ -600,6 +623,7 @@ script:
       - lambda: |-
           id(regen_last) = id(sntp_time).now().timestamp;
       - component.update: clack_regeneration_last
+      - component.update: clack_next_regen_hours
 
   # Script "update_regeneration_start_time"
   - id: update_regeneration_start_time
@@ -1439,6 +1463,104 @@ sensor:
       then:
         - component.update: clack_total_run_time_txt
 
+  ##
+  # Predict the next regeneration the way the valve decides it:
+  # - The valve regenerates at its regeneration time. Its clock stays on winter time (UTC+1),
+  #   so in summer time this is one hour later on the local clock.
+  # - It counts one day each time its regeneration time passes and regenerates at the
+  #   day override count (10 days after a night regeneration, 9 after a manual daytime one).
+  # - Earlier when, at a regeneration time, the remaining capacity is less than its reserve
+  #   (about one day of average use). That depends on the use of the last day, so it cannot
+  #   be predicted days ahead; the margin below tells how much water is left before it happens.
+  # Sensor "clack_next_regen_hours"
+  - platform: template
+    name: ${clack_next_regen_hours}
+    id: clack_next_regen_hours
+    icon: mdi:timer-sync-outline
+    unit_of_measurement: h
+    accuracy_decimals: 1
+    state_class: measurement
+    update_interval: 600s
+    lambda: |-
+      auto now = id(sntp_time).now();
+      if (!now.is_valid() || id(regen_last) <= 0) {
+        id(next_regen_ts) = 0;
+        id(avg_daily_use) = NAN;
+        id(early_regen_margin) = NAN;
+        return NAN;
+      }
+      const int64_t day = 86400;
+      int64_t regen_tod = llround(id(clack_valve_regen_time).state * 3600) - 3600;  // valve clock is UTC+1
+      regen_tod = ((regen_tod % day) + day) % day;
+
+      // First regeneration time of the valve after the last regeneration counts as day 1
+      int64_t after = (int64_t) id(regen_last) + 3600;
+      int64_t first = after - (((after % day) + day) % day) + regen_tod;
+      if (first <= after) first += day;
+      int override_days = std::max(1, (int) id(clack_valve_day_override).state);
+      int64_t next = first + (int64_t) (override_days - 1) * day;
+      bool water = false;
+
+      // Average use per day: this cycle after one day, otherwise the previous cycle
+      float used = id(totalWaterUsage);
+      float days = (now.timestamp - id(regen_last)) / 86400.0f;
+      float avg = NAN;
+      if (days >= 1.0f) {
+        avg = used / days;
+      } else if (id(save_total_operation_time) >= day) {
+        avg = id(save_total_liters_used) / (id(save_total_operation_time) / 86400.0f);
+      }
+      float margin = NAN;
+      if (!isnan(avg)) {
+        margin = id(clack_capacity_liters).state - avg - used;
+        if (margin <= 0) {
+          // Reserve reached: the valve regenerates at its next regeneration time
+          int64_t t = first;
+          while (t <= now.timestamp) t += day;
+          if (t < next) {
+            next = t;
+            water = true;
+          }
+        }
+      }
+      id(next_regen_ts) = next;
+      id(next_regen_water) = water;
+      id(avg_daily_use) = avg;
+      id(early_regen_margin) = margin;
+      return std::max(0.0f, (next - now.timestamp) / 3600.0f);
+    on_value:
+      then:
+        - component.update: clack_next_regen
+        - component.update: clack_next_regen_reason
+        - component.update: clack_avg_daily_use
+        - component.update: clack_early_regen_margin
+
+  # Sensor "clack_avg_daily_use": average water use per day (this cycle, or the previous one on day 1)
+  - platform: template
+    name: ${clack_avg_daily_use}
+    id: clack_avg_daily_use
+    icon: mdi:water-sync
+    unit_of_measurement: L/d
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      return id(avg_daily_use);
+
+  # Sensor "clack_early_regen_margin": water that can still be used before the valve regenerates
+  # earlier than the day override (capacity minus reserve of one day of average use)
+  - platform: template
+    name: ${clack_early_regen_margin}
+    id: clack_early_regen_margin
+    icon: mdi:water-alert-outline
+    unit_of_measurement: L
+    accuracy_decimals: 0
+    state_class: measurement
+    update_interval: never
+    lambda: |-
+      if (isnan(id(early_regen_margin))) return NAN;
+      return std::max(0.0f, id(early_regen_margin));
+
   # Sensor "internal_temperature"
   - platform: internal_temperature
     name: "Internal Temperature"
@@ -1477,6 +1599,34 @@ select:
 ##
 # Text sensors with general information.
 text_sensor:
+  ##
+  # Textsensor "clack_next_regen": predicted next regeneration (see clack_next_regen_hours)
+  - platform: template
+    name: ${clack_next_regen}
+    id: clack_next_regen
+    icon: mdi:calendar-sync
+    device_class: timestamp
+    update_interval: never
+    lambda: |-
+      if (id(next_regen_ts) <= 0) return {};
+      time_t t = id(next_regen_ts);
+      struct tm tm;
+      gmtime_r(&t, &tm);
+      char str[32];
+      strftime(str, sizeof(str), "%Y-%m-%dT%H:%M:%S+00:00", &tm);
+      return std::string(str);
+
+  ##
+  # Textsensor "clack_next_regen_reason": days (day override) or water usage (reserve)
+  - platform: template
+    name: ${clack_next_regen_reason}
+    id: clack_next_regen_reason
+    icon: mdi:help-circle-outline
+    update_interval: never
+    lambda: |-
+      if (id(next_regen_ts) <= 0) return {};
+      return std::string(id(next_regen_water) ? "${clack_reason_water}" : "${clack_reason_days}");
+
   ##
   # Expose ESPHome version as sensor.
   # Textsensor "clack_version"
@@ -1831,6 +1981,7 @@ number:
       then:
         - component.update: clack_time_to_regen
         - component.update: clack_percent_time_left
+        - component.update: clack_next_regen_hours
   ##
   # Set resinclean capacity days
   # Number "resinclean_capacity_days"
@@ -1926,6 +2077,46 @@ number:
     initial_value: 3
     restore_value: yes
     unit_of_measurement: cm
+
+  ##
+  # Regeneration time set on the valve, on the valve clock (winter time, it does not switch)
+  # Number "clack_valve_regen_time"
+  - platform: template
+    id: clack_valve_regen_time
+    name: ${clack_valve_regen_time}
+    icon: mdi:clock-time-nine-outline
+    optimistic: true
+    mode: box
+    step: 0.25
+    entity_category: config
+    min_value: 0
+    max_value: 23.75
+    initial_value: 21
+    restore_value: yes
+    unit_of_measurement: h
+    on_value:
+      then:
+        - component.update: clack_next_regen_hours
+
+  ##
+  # Day override set on the valve: regenerate at the latest after this many days
+  # Number "clack_valve_day_override"
+  - platform: template
+    id: clack_valve_day_override
+    name: ${clack_valve_day_override}
+    icon: mdi:calendar-refresh
+    optimistic: true
+    mode: box
+    step: 1
+    entity_category: config
+    min_value: 1
+    max_value: 99
+    initial_value: 10
+    restore_value: yes
+    unit_of_measurement: d
+    on_value:
+      then:
+        - component.update: clack_next_regen_hours
 
   ##
   # Set minimum time delay for considering water flow stopped

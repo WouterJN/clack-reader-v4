@@ -70,6 +70,15 @@ substitutions:
   clack_water_flow_timeout_delay: Water flow timeout
   clack_salt_settle_time: Temps de stabilisation sel après régénération
   clack_salt_refill_detect: Détection remplissage sel
+  clack_next_regen: "Prochaine régénération"
+  clack_next_regen_reason: "Raison prochaine régénération"
+  clack_next_regen_hours: "Heures avant prochaine régénération"
+  clack_valve_regen_time: "Heure de régénération vanne"
+  clack_valve_day_override: "Jours max vanne"
+  clack_reason_days: "Jours"
+  clack_reason_water: "Consommation d'eau"
+  clack_avg_daily_use: "Consommation moyenne par jour"
+  clack_early_regen_margin: "Eau restante avant régénération anticipée"
   clack_test_motor_run: Test button motor run
   clack_save_total_liters_used: Capacity used
   clack_save_total_operation_time: Operation time
